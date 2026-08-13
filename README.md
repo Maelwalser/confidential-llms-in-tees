@@ -212,10 +212,17 @@ This will generate log files which can be processed and plotted by `traces_parse
 
 ### Machines
 The GPU numbers compare a confidential VM against a non-confidential one, so the
-same sweep has to run twice. We used Azure `NCC40ads_H100_v5` (confidential, CC
-mode on, the `cGPU` series in the plots) and `NC40ads_H100_v5`
-(non-confidential, the `GPU` series); Azure offers no bare metal H100. Keep
-everything else identical between the two runs.
+same sweep has to run twice. Azure offers no bare metal H100, so we use a matched
+pair of single-H100 VMs and keep everything else identical between the two runs:
+
+| Series | SKU | $/hour | Confidential |
+| --- | --- | --- | --- |
+| `cGPU` | `Standard_NCC40ads_H100_v5` | 8.90 | yes, CC mode on |
+| `GPU` | `Standard_NC40ads_H100_v5` | 9.08 | no |
+
+The confidential VM is the cheaper of the two, so part of its performance
+overhead is offset when the comparison is made in cost per token rather than in
+throughput.
 
 ### Setup
 vLLM must be **0.8.5**. The sweep sets `VLLM_USE_V1=0` to force the V0 engine,
@@ -248,13 +255,17 @@ existing directory; configurations that already produced a JSON are skipped.
 ### Processing results
 Run these on your laptop, not on the GPU VM. `parse.py` prints cost per million
 generated tokens, in the format used by the `gpu_cc_cost` / `gpu_raw_cost`
-constants in `CPU/processing/vCPUs_*.py`. Pass the price of the VM the results
-came from, as the confidential and non-confidential VMs are priced differently:
+constants in `CPU/processing/vCPUs_*.py`. The price of the VM the results came
+from has to be given explicitly, since the two VMs are priced differently:
 
 ```sh
-python parse.py <cGPU results dir> --cost 6.98
-python parse.py <GPU results dir> --cost <price of the non-confidential VM>
+python parse.py <cGPU results dir> --sku NCC40ads_H100_v5   # $8.90/h
+python parse.py <GPU results dir>  --sku NC40ads_H100_v5    # $9.08/h
 ```
+
+Use `--cost <usd_per_hour>` for a region or SKU outside that table. The chosen
+price is echoed on stderr, so stdout stays a dictionary that can be pasted
+directly into the plotting scripts.
 
 Plot the comparison by passing both directories:
 
@@ -265,7 +276,9 @@ python plot_GPUs.py <cGPU results dir> <GPU results dir>
 Throughput is counted in **generated** tokens, `output_len * batch / latency`,
 matching the CPU side. Note that results produced before this was corrected used
 the input length instead, which understated cost per token by
-`input_len / output_len` for every run with an input length other than 128.
+`input_len / output_len` for every run with an input length other than 128, and
+priced both VMs at $6.98/hour, which matches neither SKU. Cost constants
+generated before those two corrections need to be regenerated.
 
 ## RAG
 Make sure you have your submodules initialized. Then, enter the RAG directory and apply the patch:
