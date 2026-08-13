@@ -159,15 +159,43 @@ To quantize the models, follow `genQuantLLamaModels.sh`.
 ### Processing Results
 
 `run_parser.py` gathers all token latencies from each experiments and places
-them into a csv file. It requires a single argument for the results folder to
-look in for results files. Any file ending in `.txt` is considered a result
-file.
+them into a csv file. It accepts one or more results folders to look in for
+results files, searched recursively. Any file ending in `.txt` is considered a
+result file.
 
 ```sh
-python parse_results.py results/<date>-<time>
+python processing/run_parser.py results/<date>-<time> [results/<date>-<time> ...]
 ```
 
-The resulting CSV file will be stored in `results/<date>-<time>`. These can be parsed by some of the plotting helper functions we provide in `/processing`.
+The resulting `results.csv` is written to the current directory. These can be parsed by some of the plotting helper functions we provide in `/processing`.
+
+#### System labels
+
+The plotting scripts select rows by exact match on the `system` column, which
+by default is the first argument you passed to `run.sh`. Each script expects a
+specific set of labels:
+
+| Script | Expected `system` labels | `numa` |
+| --- | --- | --- |
+| `AMX_latency.py`, `AMX_throughput.py` | `VM (AMX)`, `TDX (AMX)`, `VM (no AMX)`, `TDX (no AMX)` | `2s` / `1s` |
+| `model_scaling_single_socket.py` | `baremetal`, `VM`, `TDX`, `SGX` | `1s` |
+| `model_scaling_double_socket.py` | `baremetal`, `VM FH`, `VM TH`, `TDX` | `2s` |
+| `model_scaling_70B.py` | `VM B`, `TDX`, `VM NB` | `2s` |
+| `vCPUs_batch_size.py`, `vCPUs_input.py` | `baremetal`, `VM`, `TDX` | — |
+
+Labels containing spaces or parentheses cannot be passed to `run.sh`, as they
+become part of the result file names. To attach such a label, put it in a
+`system.txt` file next to the results; it then overrides the label for every
+result file in that directory:
+
+```sh
+echo "TDX (no AMX)" > results/<date>-<time>/system.txt
+python processing/run_parser.py results/<date>-<time>
+```
+
+Labels that do contain dashes (e.g. `TDX-no-AMX`) are parsed correctly from the
+file name. If a filter matches no rows, the scripts report which labels were
+requested and which ones the CSV contains instead of drawing an empty figure.
 
 ### Tracing
 To obtain traces, start the Docker container:

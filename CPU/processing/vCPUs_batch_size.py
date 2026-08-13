@@ -5,23 +5,23 @@ import sys
 import numpy as np
 from scipy import stats
 from matplotlib.gridspec import GridSpec
+from results import load_results, require_rows
 
 # Get the directory from the first argument
 file = sys.argv[1]
-plt.rcParams.update({'font.size': 12.5}) 
+plt.rcParams.update({'font.size': 12.5})
 
 def filter_dataframe(data_type, order, size, bs):
     # Initial load and case filtering
-    df = pd.read_csv(f"{file}")
+    raw = load_results(file)
 
     # df = df.loc[df['index'] != 0]
-    df = df.loc[df['system'].isin(order)]
+    df = raw.loc[raw['system'].isin(order)]
     df = df.loc[df['dt'] == data_type]
-    print(df)
     df = df.loc[df['size'] == size]
     df = df.loc[df['bs'] == bs]
 
-    return df
+    return require_rows(df, raw, file, system=order, dt=data_type, size=size, bs=bs)
 
 # Define the constants
 HUE_ORDER = ["baremetal", "VM", "TDX"]

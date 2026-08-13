@@ -4,6 +4,7 @@ import pandas as pd
 import sys
 import numpy as np
 from scipy import stats
+from results import load_results, require_rows
 
 # Get the directory from the first argument
 file = sys.argv[1]
@@ -15,17 +16,17 @@ def plot_arrows(start, end, height, height_diff, text, ax):
 
 def filter_dataframe(batch_size, throughput, data_type, order, size, numa):
     # Initial load and case filtering
-    df = pd.read_csv(f"{file}")
+    raw = load_results(file)
 
-    df = df.loc[df['index'] != 0]
+    df = raw.loc[raw['index'] != 0]
     if throughput:
         df["throughput"] = 6/df["time"]
     df = df.loc[df['system'].isin(order)]
     df = df.loc[df['bs'] == batch_size]
     df = df.loc[df['dt'] == data_type]
-    print(df)
     df = df.loc[df['size'] == size]
     df = df.loc[df['numa'] == numa]
+    require_rows(df, raw, file, system=order, bs=batch_size, dt=data_type, size=size, numa=numa)
     df['time'] *= 1000
 
     # Filter outliers

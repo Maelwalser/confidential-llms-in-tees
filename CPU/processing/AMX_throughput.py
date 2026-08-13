@@ -4,23 +4,23 @@ import pandas as pd
 import sys
 import numpy as np
 from scipy import stats
+from results import load_results, require_rows
 
 # Get the directory from the first argument
 file = sys.argv[1]
-plt.rcParams.update({'font.size': 12}) 
+plt.rcParams.update({'font.size': 12})
 
 def filter_dataframe(data_type, order, size, numa):
     # Initial load and case filtering
-    df = pd.read_csv(f"{file}")
+    raw = load_results(file)
 
-    df = df.loc[df['index'] != 0]
+    df = raw.loc[raw['index'] != 0]
     df = df.loc[df['system'].isin(order)]
     df = df.loc[df['dt'] == data_type]
-    print(df)
     df = df.loc[df['size'] == size]
     df = df.loc[df['numa'] == numa]
 
-    return df
+    return require_rows(df, raw, file, system=order, dt=data_type, size=size, numa=numa)
 
 # Define the constants
 HUE_ORDER = ["VM (AMX)", "TDX (AMX)", "VM (no AMX)", "TDX (no AMX)"]
