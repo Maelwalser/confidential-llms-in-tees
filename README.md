@@ -16,7 +16,6 @@ To setup the host for running experiments, please first initalize the repository
 ```sh
 git clone https://github.com/spcl/confidential-llms-in-tees.git
 cd confidential-llms-in-tees
-git submodule sync
 git submodule update --init --recursive
 cd CPU/tdx
 git apply ../tdx.patch
@@ -24,14 +23,83 @@ cd ../intel-extension-for-pytorch
 git apply ../ipex.patch
 cd ..
 ```
+
+The submodules are pinned to exact commits, so `--init` checks out the revisions
+the patches were written against and no `git submodule sync` is needed:
+
+| Submodule | Upstream | Pinned revision |
+| --- | --- | --- |
+| `CPU/intel-extension-for-pytorch` | intel/intel-extension-for-pytorch | `f92dcd4f` (tag `v2.3.100+cpu`) |
+| `CPU/tdx` | canonical/tdx | `4f4ff286` (tag `2.0`) |
+| `CPU/gramine` | gramineproject/gramine | `10e93534` (tag `v1.7`) |
+| `RAG/beir` | beir-cellar/beir | `49d4338c` |
+
+`--recursive` is required, not optional: IPEX is compiled from source (see
+below) and that needs its own `third_party` submodules. Expect the recursive
+clone to pull on the order of 10 GB.
+
+The `canonical/tdx` branch this repository used to track (`noble-24.04`) no
+longer exists upstream — the repository was reorganised and that history is now
+only reachable through tag `2.0`, which is what the pin above points at. This is
+also the revision `tdx.patch` applies to.
+
 Then run the host setup script which will setup hugging face, create Docker, and build the necessary image:
 ```sh
 HUGGINGFACE_TOKEN=<token> ./host_setup.sh
 ```
-Relogin to apply changes in groups. Finally, compile the docker container:
+Relogin to apply changes in groups. Finally, compile the docker container. The
+build context has to be the IPEX checkout itself, since the Dockerfile copies
+the context into the image and builds IPEX out of it:
 ```sh
-DOCKER_BUILDKIT=1 docker build -f intel-extension-for-pytorch/examples/cpu/inference/python/llm/Dockerfile -t ipex-llm:2.3.100 .
+DOCKER_BUILDKIT=1 docker build \
+    -f intel-extension-for-pytorch/examples/cpu/inference/python/llm/Dockerfile \
+    -t ipex-llm:2.3.100 \
+    intel-extension-for-pytorch/
 ```
+
+This compiles IPEX, PyTorch, LLVM, oneCCL and DeepSpeed from source and takes
+roughly 1–2 hours on a Xeon server. It is not the fast path by choice — see the
+next section.
+
+### IPEX is end-of-life: the prebuilt wheels are gone
+
+Intel has discontinued Intel® Extension for PyTorch and revoked the published
+CPU wheels. The pinned `intel-extension-for-pytorch==2.3.100+cpu` wheel is still
+listed on the package index, but the file itself now answers `403 AccessDenied`:
+
+```sh
+curl -sI https://download.pytorch-extension.intel.com/ipex_stable/cpu/intel_extension_for_pytorch-2.3.100%2Bcpu-cp310-cp310-linux_x86_64.whl
+```
+
+That makes `tools/env_setup.sh 6`, the prebuilt install path, unusable — pip
+resolves the wheel from the index and then fails to download it. (`oneccl-bind-pt`
+is unaffected and still serves, so the failure looks like a partial outage
+rather than an EOL.)
+
+`ipex.patch` therefore changes the Dockerfile default to `ARG COMPILE=ON`,
+routing the build to `tools/env_setup.sh 2` (compile from source). No
+`--build-arg` is needed. If Intel ever restores the wheels, the old behaviour is
+still reachable with `--build-arg COMPILE=` (an empty value).
+
+The 2.3.100 source tree freezes its build dependencies at versions that current
+toolchains reject, so `ipex.patch` also carries the following build fixes. They
+are listed here because the same failures appear if you build IPEX outside this
+repository's Dockerfile:
+
+- **CMake 4 rejects the pinned oneCCL.** oneCCL `2021.11` still declares
+  `cmake_minimum_required(VERSION 2.8)`, and CMake 4 removed compatibility with
+  anything below 3.5 — it errors out with *"Compatibility with CMake < 3.5 has
+  been removed"*. Both places that provide CMake are capped: `tools/env_setup.sh`
+  installs `cmake>=3.5,<4` from conda-forge, and `scripts/compile_bundle.sh`
+  installs `"cmake<4"` instead of a bare `cmake`. Capping only the conda one is
+  not enough — the unpinned `pip install cmake` in `compile_bundle.sh` shadows it
+  on `PATH`. `CMAKE_POLICY_VERSION_MINIMUM=3.5` is set in the Dockerfile as a
+  second line of defence.
+- **`ModuleNotFoundError: No module named 'pkg_resources'`.** setuptools 70
+  dropped the bundled `pkg_resources` that the frozen build scripts still import.
+  Both conda environments (`compile_py310` for the build, `py310` for the
+  runtime) pin `setuptools<70`, and the runtime pin is reapplied at the end of
+  the deploy stage so that it survives the dependency installs in between.
 
 ### SGX Setup
 
@@ -40,7 +108,7 @@ Please follow the script in ```sgx_setup.sh```. It installs the dependencies for
 Following the SGX setup should allow you to run the following hello world Gramine example.
 
 ```
-cd gramine/CI-Example/helloworld
+cd CPU/gramine/CI-Examples/helloworld
 make SGX=1
 gramine-sgx helloworld
 ```
@@ -50,7 +118,7 @@ In case you encounter errors related to Gramine, please refer to [its documentat
 #### Prepare a TDX VM image
 Use TDX guest tools to generate a TDX VM image. By default, we create a 300GB image but it should be at least 200GB (required for 70B Llama2 model). For more in depth treatment such as BIOS configuration for TDX, follow the instructions within the [Ubuntu's TDX](https://github.com/canonical/tdx) repository. In short, run:
 ```sh
-cd tdx/guest-tools/image/
+cd CPU/tdx/guest-tools/image/
 sudo ./create-td-image.sh
 ```
 Update the `td_guest.xml` to point to the newly created image. Then, define and start the TD:
@@ -61,24 +129,24 @@ sudo virsh start tdx
 The default PW of user `ubuntu` is `123456`. The default port on which the VM will be available is 10022.
 If you run into permission issues, it might be useful to copy the qcow2 file to libvirt's images:
 ```sh
-sudo cp ~/confidential-llms-in-tees/tdx/guest-tools/image/tdx-guest-ubuntu-24.04-generic.qcow2 /var/lib/libvirt/images/
+sudo cp ~/confidential-llms-in-tees/CPU/tdx/guest-tools/image/tdx-guest-ubuntu-24.04-generic.qcow2 /var/lib/libvirt/images/
 ```
 Consider creating an ssh key and copying it to the running TD for faster login.
 
 #### Copy the repository to the VM
 Initialize the repository in the VM exactly as outlined above in host setup or use `rsync` to copy the files to the VM:
 ```sh
-rsync -avzog --exclude tdx/ -e 'ssh -p 10022' confidential-llms-in-tees/ tdx@localhost:~/confidential-llms-in-tees
+rsync -avzog --exclude 'CPU/tdx/' -e 'ssh -p 10022' confidential-llms-in-tees/ tdx@localhost:~/confidential-llms-in-tees
 ```
 SSH to the VM and run the host setup script:
 ```sh
 ssh -p 10022 tdx@localhost
-cd confidential-llms-in-tees
+cd confidential-llms-in-tees/CPU
 HUGGINGFACE_TOKEN=<token> ./host_setup.sh
 ```
 Relogin to apply changes in groups. Finally, compile the docker container:
 ```sh
-cd confidential-llms-in-tees/intel-extension-for-pytorch/
+cd ~/confidential-llms-in-tees/CPU/intel-extension-for-pytorch/
 DOCKER_BUILDKIT=1 docker build -f examples/cpu/inference/python/llm/Dockerfile -t ipex-llm:2.3.100 .
 ```
 
