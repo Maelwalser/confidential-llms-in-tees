@@ -9,8 +9,32 @@ config_num_iter=50
 config_num_warmup=10
 config_out_token=128
 config_in_token=1024
-config_procs=120
-config_socket=$(( config_procs / 2 )) 
+
+# Machine topology, detected at runtime so that the socket tag in the result
+# file names describes the machine the sweep actually runs on. Override with
+# CONFIG_PROCS / CONFIG_SOCKETS when detection is not possible or not wanted.
+detect_sockets() {
+    local sockets=""
+    if command -v lscpu &> /dev/null; then
+        sockets=$(lscpu | awk -F: '/^Socket\(s\):/ {gsub(/[[:space:]]/, "", $2); print $2; exit}')
+    fi
+    # Fall back to the number of NUMA nodes, then to a single socket
+    if ! [[ $sockets =~ ^[0-9]+$ ]] || (( sockets < 1 )); then
+        if command -v numactl &> /dev/null; then
+            sockets=$(numactl --hardware | awk '/^available:/ {print $2; exit}')
+        fi
+    fi
+    if ! [[ $sockets =~ ^[0-9]+$ ]] || (( sockets < 1 )); then
+        sockets=1
+    fi
+    printf '%s' "$sockets"
+}
+
+config_procs=${CONFIG_PROCS:-$(nproc --all)}
+config_sockets=${CONFIG_SOCKETS:-$(detect_sockets)}
+# Logical CPUs per socket; on a single-socket machine this is the full CPU
+# count, so no run can be tagged as spanning two sockets.
+config_procs_per_socket=$(( config_procs / config_sockets ))
 
 # per date folder
 date=$(date +"%F-%H-%M")
@@ -18,6 +42,7 @@ directory=results/$date
 mkdir -p $directory
 
 echo "storing results in $directory"
+echo "detected topology: $config_procs vCPUs, $config_sockets socket(s), $config_procs_per_socket vCPUs per socket"
 echo "$1 stored in $directory" >> experiment.log
 
 {
@@ -51,7 +76,7 @@ echo "$1 stored in $directory" >> experiment.log
                                 bind_cores=''
                             fi
                             name=$name-${vCPUs_num}vCPU
-                            if (( vCPUs_num > config_socket )); then
+                            if (( vCPUs_num > config_procs_per_socket )); then
                                 numa='2s'
                             else
                                 numa='1s'
