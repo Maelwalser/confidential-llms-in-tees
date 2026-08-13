@@ -209,12 +209,63 @@ cd llm && source ../miniforge3/bin/activate && conda activate py310 && source to
 This will generate log files which can be processed and plotted by `traces_parser.py`. It accepts two files with traces that correspond to two compared systems.
 
 ## GPU
-GPUs require vLLM. Follow (their installation instructions)[https://github.com/vllm-project/vllm] to enable them on your system.
-You can then run the benchmark using:
+
+### Machines
+The GPU numbers compare a confidential VM against a non-confidential one, so the
+same sweep has to run twice. We used Azure `NCC40ads_H100_v5` (confidential, CC
+mode on, the `cGPU` series in the plots) and `NC40ads_H100_v5`
+(non-confidential, the `GPU` series); Azure offers no bare metal H100. Keep
+everything else identical between the two runs.
+
+### Setup
+vLLM must be **0.8.5**. The sweep sets `VLLM_USE_V1=0` to force the V0 engine,
+which 0.9 and later removed, and it calls `benchmark_latency.py`, which lives in
+vLLM's source tree rather than in the wheel and moved in later releases. The
+setup script pins the version, fetches that script from the matching tag, and
+checks that the (gated) model is accessible before any GPU time is spent:
+
+```sh
+cd GPU
+./setup_gpu.sh
 ```
+
+### Running the benchmark
+```sh
 ./benchmark_vllm.sh
 ```
-You can parse the produced logs using `parse.py` and plot using `plot_GPUs.py` (modify inside the names of your CSVs).
+
+By default this runs the 14 configurations behind the GPU figure: a batch size
+sweep (1 → 512) at input length 128, and an input length sweep (128 → 2048) at
+batch size 4. Use `SWEEP=full` for the complete 3 × 10 cross-product of input
+lengths {128, 1024, 2048} and batch sizes 1 → 512 (roughly 1.6 GPU-hours).
+Batches whose KV cache exceeds GPU memory are not an error: vLLM processes them
+in several waves, so the large configurations run, they are just slow.
+
+A failing configuration is recorded in `<results dir>/failed.txt` and the sweep
+continues. To retry only the failures, re-run with `RESULTS_DIR` set to the
+existing directory; configurations that already produced a JSON are skipped.
+
+### Processing results
+Run these on your laptop, not on the GPU VM. `parse.py` prints cost per million
+generated tokens, in the format used by the `gpu_cc_cost` / `gpu_raw_cost`
+constants in `CPU/processing/vCPUs_*.py`. Pass the price of the VM the results
+came from, as the confidential and non-confidential VMs are priced differently:
+
+```sh
+python parse.py <cGPU results dir> --cost 6.98
+python parse.py <GPU results dir> --cost <price of the non-confidential VM>
+```
+
+Plot the comparison by passing both directories:
+
+```sh
+python plot_GPUs.py <cGPU results dir> <GPU results dir>
+```
+
+Throughput is counted in **generated** tokens, `output_len * batch / latency`,
+matching the CPU side. Note that results produced before this was corrected used
+the input length instead, which understated cost per token by
+`input_len / output_len` for every run with an input length other than 128.
 
 ## RAG
 Make sure you have your submodules initialized. Then, enter the RAG directory and apply the patch:

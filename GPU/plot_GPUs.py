@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
+"""Compare a confidential (cGPU) and a non-confidential (GPU) vLLM sweep.
+
+Usage:  python plot_GPUs.py [<cGPU results dir> <GPU results dir>]
+
+Both directories are produced by benchmark_vllm.sh, the first one on a
+confidential VM (CC mode on), the second on an otherwise identical
+non-confidential VM.
+"""
 import os
 import re
+import sys
 import glob
 import json
 import pandas as pd
@@ -8,8 +17,17 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
+# Defaults are the directories of the original runs; pass your own on the
+# command line rather than editing them here.
 CC_DIR       = "results_2025-05-04_16-34-55"
 VM_DIR       = "results_2025-05-04_21-51-14"
+if len(sys.argv) == 3:
+    CC_DIR, VM_DIR = sys.argv[1], sys.argv[2]
+elif len(sys.argv) != 1:
+    sys.exit(f"usage: {sys.argv[0]} [<cGPU results dir> <GPU results dir>]")
+
+# Tokens generated per sequence; must match OUTPUT_LEN in benchmark_vllm.sh
+OUTPUT_LEN   = 128
 FIXED_INPUT  = 128      # input length for the left plot
 FIXED_BATCH  = 4        # batch size for the right plot
 MAX_BATCH    = 512      # only include batch_size ≤ 512
@@ -42,17 +60,22 @@ for system, d in [("cGPU", CC_DIR), ("GPU", VM_DIR)]:
         if not latencies:
             continue
 
-        # append one row per-sample
+        # append one row per-sample; benchmark_latency.py reports seconds
         for lat in latencies:
             rows.append({
                 "system":     system,
                 "input_len":  inp,
                 "batch_size": bs,
-                "latency_ms": lat,
-                "throughput": 128 * bs / lat  # samples per second
+                "latency_s":  lat,
+                "throughput": OUTPUT_LEN * bs / lat  # generated tokens per second
             })
 
 df = pd.DataFrame(rows)
+if df.empty:
+    sys.exit(
+        f"No usable results found in {CC_DIR!r} (cGPU) or {VM_DIR!r} (GPU).\n"
+        "Pass the two directories produced by benchmark_vllm.sh as arguments."
+    )
 
 # 2) Prepare figure
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 3))
