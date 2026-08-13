@@ -41,11 +41,14 @@ echo "$1 stored in $directory" >> experiment.log
                             name=$directory/$1
                             name=$name-${in_token}in
                             name=$name-${out_token}out
+                            # keep $vCPUs intact: it is the loop variable and is
+                            # re-read by every following iteration
                             if [[ -n ${vCPUs//[[:space:]]/} ]]; then
                                 vCPUs_num=$(awk -F- '{print (NF==1)?$1:($2-$1+1)}' <<< "$vCPUs")
-                                vCPUs="--bind_core_list $vCPUs"
+                                bind_cores="--bind_core_list $vCPUs"
                             else
                                 vCPUs_num=$config_procs
+                                bind_cores=''
                             fi
                             name=$name-${vCPUs_num}vCPU
                             if (( vCPUs_num > config_socket )); then
@@ -87,23 +90,22 @@ echo "$1 stored in $directory" >> experiment.log
                             fi
 
                             cmd=(docker run --rm --privileged --shm-size="2gb" -v $HOME/.cache:/home/ubuntu/.cache ipex-llm:2.3.100 bash -c \
-                                "cd llm && source ../miniforge3/bin/activate && conda activate py310 && source tools/env_activate.sh && sudo chown -R 1000:1000 ~/.cache && deepspeed --bind_cores_to_rank $vCPUs distributed/run_generation_with_deepspeed.py --deployment-mode --profile --benchmark -m $model $quant --ipex --batch-size $batch_size --num-iter $num_iter --num-warmup $num_warmup --max-new-tokens $out_token --input-tokens $in_token --token-latency $greedy" )
+                                "cd llm && source ../miniforge3/bin/activate && conda activate py310 && source tools/env_activate.sh && sudo chown -R 1000:1000 ~/.cache && deepspeed --bind_cores_to_rank $bind_cores distributed/run_generation_with_deepspeed.py --deployment-mode --profile --benchmark -m $model $quant --ipex --batch-size $batch_size --num-iter $num_iter --num-warmup $num_warmup --max-new-tokens $out_token --input-tokens $in_token --token-latency $greedy" )
 
                             # log cmd
                             echo "${cmd[@]}" > $name.txt
 
                             # run cmd
                             "${cmd[@]}" &>> $name.txt
-
-                            # Finished run
-                            echo "Finished"
-                            exit 0
                         done
                     done
                 done
             done
         done
     done
+
+    # Finished run
+    echo "Finished"
 # store run log
 } &> $directory/run.out
 
