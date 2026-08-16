@@ -12,6 +12,8 @@ config=$1
 # `docker run -e NAME` (no value) passes the value through from this environment,
 # which keeps the token out of the command line -- and so out of the logged
 # command, the `set -x` trace in run.out, and `ps`.
+# xtrace is off across this block so the trace does not print the token itself.
+set +x
 : "${HF_TOKEN:=${HUGGINGFACE_TOKEN:-}}"
 if [[ -z "$HF_TOKEN" ]]; then
     echo "HF_TOKEN (or HUGGINGFACE_TOKEN) is not set; the gated models will 401." >&2
@@ -19,6 +21,7 @@ if [[ -z "$HF_TOKEN" ]]; then
 fi
 export HF_TOKEN
 export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+set -x
 
 config_num_iter=50
 config_num_warmup=10
