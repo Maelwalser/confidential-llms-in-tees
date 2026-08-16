@@ -17,6 +17,21 @@ set -uo pipefail
 config="${1:?Pass a label, e.g. \"TDX (AMX)\" or \"VM (AMX)\"}"
 SWEEP="${SWEEP:-both}"
 
+# The Llama-2 weights are gated. Logging in on the host is not enough: the
+# benchmark runs inside the container, so the token has to be forwarded there or
+# every config fails with a 401. Both spellings are exported because transformers
+# and huggingface_hub have disagreed about the name across versions.
+# `docker run -e NAME` (no value) passes the value through from this environment,
+# which keeps the token out of the command line -- and so out of the command
+# echoed into every result file, and out of `ps`.
+: "${HF_TOKEN:=${HUGGINGFACE_TOKEN:-}}"
+if [[ -z "$HF_TOKEN" ]]; then
+    echo "HF_TOKEN (or HUGGINGFACE_TOKEN) is not set; the gated models will 401." >&2
+    exit 1
+fi
+export HF_TOKEN
+export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+
 # --- physical-core binding by default (avoids the hyperthread-contention regime) ---
 NPROC="$(nproc --all)"
 PHYS="$(lscpu | awk -F: '/^Core\(s\) per socket:/{gsub(/ /,"",$2);c=$2} /^Socket\(s\):/{gsub(/ /,"",$2);s=$2} END{if(c&&s)print c*s}')"
@@ -64,7 +79,9 @@ run_one() {
     local num_iter=50 num_warmup=10 greedy=''
     if [[ "$batch_size" -eq 1 ]]; then greedy='--greedy'; else num_iter=25 num_warmup=5; fi
 
-    local cmd=(docker run --rm --privileged --shm-size=2gb -v "$HOME/.cache:/home/ubuntu/.cache" "$IMAGE" bash -c
+    local cmd=(docker run --rm --privileged --shm-size=2gb
+        -e HF_TOKEN -e HUGGING_FACE_HUB_TOKEN
+        -v "$HOME/.cache:/home/ubuntu/.cache" "$IMAGE" bash -c
         "cd llm && source ../miniforge3/bin/activate && conda activate py310 && source tools/env_activate.sh && sudo chown -R 1000:1000 ~/.cache && deepspeed --bind_cores_to_rank --bind_core_list $VCPU_LIST distributed/run_generation_with_deepspeed.py --deployment-mode --profile --benchmark -m $model $quant --ipex --batch-size $batch_size --num-iter $num_iter --num-warmup $num_warmup --max-new-tokens $OUT_TOKEN --input-tokens $in_token --token-latency $greedy")
     echo "${cmd[@]}" >"$name.txt"
     if "${cmd[@]}" &>>"$name.txt"; then

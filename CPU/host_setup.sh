@@ -3,12 +3,28 @@
 # stop on failure
 set -euxo pipefail
 
-# Create venv and login
-sudo apt install -y python3-venv numactl
+# Accept either name: the sweep runners forward HF_TOKEN into the container,
+# this script historically took HUGGINGFACE_TOKEN. Fail here rather than with a
+# 401 an hour into a sweep.
+: "${HF_TOKEN:=${HUGGINGFACE_TOKEN:-}}"
+if [ -z "$HF_TOKEN" ]; then
+    set +x
+    echo "HF_TOKEN (or HUGGINGFACE_TOKEN) is not set." >&2
+    echo "The Llama-2 models are gated; export a token with access to them." >&2
+    exit 1
+fi
+
+# Azure's default apt mirror is port 80 only, which the benchmark VMs block.
+# Also does the apt-get update that the installs below need.
+bash "$(dirname "$0")/fix_apt_mirrors.sh"
+
+# Create venv and login. lshw is used by run.sh to record machine provenance;
+# under `set -e` a missing lshw aborts the sweep before it starts.
+sudo apt install -y python3-venv numactl lshw
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U "huggingface_hub[cli]"
-huggingface-cli login --token $HUGGINGFACE_TOKEN
+huggingface-cli login --token $HF_TOKEN
 
 ###### DOCKER #######
 # Add Docker's official GPG key:

@@ -1,8 +1,36 @@
 diff --git a/examples/cpu/inference/python/llm/Dockerfile b/examples/cpu/inference/python/llm/Dockerfile
-index f0cb27c..06929ad 100644
+index f0cb27c..0e3d2d8 100644
 --- a/examples/cpu/inference/python/llm/Dockerfile
 +++ b/examples/cpu/inference/python/llm/Dockerfile
-@@ -41,12 +41,20 @@ RUN curl -fsSL -v -o miniforge.sh -O https://github.com/conda-forge/miniforge/re
+@@ -10,7 +10,14 @@ FROM ${BASE_IMAGE} AS base
+ RUN if [ -f /etc/apt/apt.conf.d/proxy.conf ]; then rm /etc/apt/apt.conf.d/proxy.conf; fi && \
+     if [ ! -z ${HTTP_PROXY} ]; then echo "Acquire::http::Proxy \"${HTTP_PROXY}\";" >> /etc/apt/apt.conf.d/proxy.conf; fi && \
+     if [ ! -z ${HTTPS_PROXY} ]; then echo "Acquire::https::Proxy \"${HTTPS_PROXY}\";" >> /etc/apt/apt.conf.d/proxy.conf; fi
+-RUN apt update && \
++# The benchmark VMs sit behind an NSG that permits outbound 443 only, so apt has
++# to speak HTTPS. ubuntu:22.04 ships no CA bundle -- ca-certificates is installed
++# by the very apt call below -- which would leave the first apt unable to verify
++# the mirror and unable to install the certificates that would fix it. host-ca is
++# staged from the host by CPU/bootstrap_build.sh to break that cycle.
++COPY host-ca/certs /etc/ssl/certs
++RUN sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list && \
++    apt update && \
+     apt full-upgrade -y && \
+     DEBIAN_FRONTEND=noninteractive apt install --no-install-recommends -y \
+     sudo \
+@@ -36,17 +43,32 @@ RUN useradd -m ubuntu && \
+ USER ubuntu
+ WORKDIR /home/ubuntu
+ 
++# The source build clones repositories and updates submodules. Ports 9418
++# (git://) and 22 (SSH) are closed on the benchmark VMs, so rewrite every GitHub
++# remote -- including transitive submodule URLs -- to HTTPS. Set in the base
++# stage so both the dev and the deploy stage inherit it.
++RUN git config --global url."https://github.com/".insteadOf "git://github.com/" && \
++    git config --global url."https://github.com/".insteadOf "git@github.com:"
++
+ RUN curl -fsSL -v -o miniforge.sh -O https://github.com/conda-forge/miniforge/releases/download/24.1.2-0/Miniforge3-24.1.2-0-Linux-x86_64.sh && \
+     bash miniforge.sh -b -p ./miniforge3 && \
      rm miniforge.sh && \
      echo "source ~/miniforge3/bin/activate" >> ./.bashrc
  
@@ -25,7 +53,7 @@ index f0cb27c..06929ad 100644
      cd intel-extension-for-pytorch/examples/cpu/inference/python/llm && \
      if [ -z ${COMPILE} ]; then bash tools/env_setup.sh 6; else bash tools/env_setup.sh 2; fi
  
-@@ -56,6 +64,7 @@ RUN rm ./llm/tools/get_libstdcpp_lib.sh
+@@ -56,6 +78,7 @@ RUN rm ./llm/tools/get_libstdcpp_lib.sh
  COPY --from=dev --chown=ubuntu:ubuntu /home/ubuntu/intel-extension-for-pytorch/examples/cpu/inference/python/llm/tools/get_libstdcpp_lib.sh ./llm/tools/get_libstdcpp_lib.sh
  RUN . ./miniforge3/bin/activate && \
      conda create -y -n py310 python=3.10 && conda activate py310 && \
@@ -33,13 +61,21 @@ index f0cb27c..06929ad 100644
      echo "conda activate py310" >> ./.bashrc && \
      echo "echo \"**Note:** For better performance, please consider to launch workloads with command 'ipexrun'.\"" >> ./.bashrc && \
      cd ./llm && \
-@@ -64,4 +73,5 @@ RUN . ./miniforge3/bin/activate && \
+@@ -64,4 +87,13 @@ RUN . ./miniforge3/bin/activate && \
      conda clean -a -y && \
      sudo mv ./oneCCL_release /opt/oneCCL && \
      sudo chown -R root:root /opt/oneCCL && \
 -    sed -i "s|ONECCL_PATH=.*|ONECCL_PATH=/opt/oneCCL|" ./tools/env_activate.sh
 +    sed -i "s|ONECCL_PATH=.*|ONECCL_PATH=/opt/oneCCL|" ./tools/env_activate.sh && \
 +    pip install "numpy<2.0.0" "setuptools<70"
++
++# tools/env_setup.sh downloads prompt.json from an Intel S3 bucket that now
++# answers 403, then symlinks single_instance/prompt.json and
++# distributed/prompt.json at it -- so the failed download leaves two dangling
++# links and the benchmark dies with FileNotFoundError. Supply the file from
++# CPU/prompt.json instead; both symlinks resolve against it. This must come
++# after the RUN above, which starts by deleting any prompt.json it finds.
++COPY --chown=ubuntu:ubuntu prompt.json ./llm/prompt.json
 diff --git a/examples/cpu/inference/python/llm/distributed/run_generation_with_deepspeed.py b/examples/cpu/inference/python/llm/distributed/run_generation_with_deepspeed.py
 index e214aa8..41c290f 100644
 --- a/examples/cpu/inference/python/llm/distributed/run_generation_with_deepspeed.py
@@ -120,7 +156,7 @@ index 594e0cd..02be9b6 100644
 +            print()
 +        print("end token times")
 diff --git a/examples/cpu/inference/python/llm/tools/env_setup.sh b/examples/cpu/inference/python/llm/tools/env_setup.sh
-index 1c2497a..37c9c6a 100644
+index 1c2497a..9212599 100644
 --- a/examples/cpu/inference/python/llm/tools/env_setup.sh
 +++ b/examples/cpu/inference/python/llm/tools/env_setup.sh
 @@ -81,7 +81,8 @@ if [ $((${MODE} & 0x02)) -ne 0 ]; then
@@ -133,6 +169,20 @@ index 1c2497a..37c9c6a 100644
  
      echo "#!/bin/bash" > ${AUX_INSTALL_SCRIPT}
      if [ $((${MODE} & 0x04)) -ne 0 ]; then
+@@ -214,7 +215,12 @@ if [ $((${MODE} & 0x01)) -ne 0 ]; then
+     if [ -f prompt.json ]; then
+         rm -f prompt.json
+     fi
+-    wget https://intel-extension-for-pytorch.s3.amazonaws.com/miscellaneous/llm/prompt.json
++    # This bucket answers 403 since Intel end-of-lifed IPEX, which aborts the
++    # build here. The file is unrecoverable upstream, so it is supplied from
++    # CPU/prompt.json and COPYed into the deploy stage of the Dockerfile after
++    # this script runs; the symlinks created below resolve against it. Keep the
++    # download attempt in case the bucket ever comes back, but never fail on it.
++    wget https://intel-extension-for-pytorch.s3.amazonaws.com/miscellaneous/llm/prompt.json || true
+     cd single_instance
+     if [ -f prompt.json ]; then
+         rm -f prompt.json
 diff --git a/scripts/compile_bundle.sh b/scripts/compile_bundle.sh
 index bfa98b2..1294a6b 100644
 --- a/scripts/compile_bundle.sh

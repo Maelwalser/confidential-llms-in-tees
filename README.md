@@ -43,9 +43,9 @@ longer exists upstream — the repository was reorganised and that history is no
 only reachable through tag `2.0`, which is what the pin above points at. This is
 also the revision `tdx.patch` applies to.
 
-Then run the host setup script which will setup hugging face, create Docker, and build the necessary image:
+Then run the host setup script which will setup hugging face and create Docker:
 ```sh
-HUGGINGFACE_TOKEN=<token> ./host_setup.sh
+HF_TOKEN=<token> ./host_setup.sh
 ```
 Relogin to apply changes in groups. Finally, compile the docker container. The
 build context has to be the IPEX checkout itself, since the Dockerfile copies
@@ -61,7 +61,20 @@ This compiles IPEX, PyTorch, LLVM, oneCCL and DeepSpeed from source and takes
 roughly 1–2 hours on a Xeon server. It is not the fast path by choice — see the
 next section.
 
-### IPEX is end-of-life: the prebuilt wheels are gone
+> **On a VM with restricted egress, use `CPU/bootstrap_build.sh` instead.** It
+> performs the whole sequence above — submodule init, `ipex.patch`, build — plus
+> the extra steps a HTTPS-only network needs, and it is idempotent. See
+> [`README_LOCKDOWN.md`](README_LOCKDOWN.md). It is also the easier path on an
+> unrestricted machine, since it stages `prompt.json` for you (see below).
+
+Note that `bootstrap_build.sh` replaces the IPEX submodule's `.git` pointer file
+with a real `.git` directory. The Dockerfile copies the checkout into the build
+context, where the parent repository does not exist, so `compile_bundle.sh`'s
+`git submodule update` otherwise fails with *"fatal: not a git repository"*.
+Doing this makes the outer repository report the submodule as modified, which is
+why it is a build step rather than something committed.
+
+### IPEX is end-of-life: the prebuilt wheels and `prompt.json` are gone
 
 Intel has discontinued Intel® Extension for PyTorch and revoked the published
 CPU wheels. The pinned `intel-extension-for-pytorch==2.3.100+cpu` wheel is still
@@ -100,6 +113,24 @@ repository's Dockerfile:
   Both conda environments (`compile_py310` for the build, `py310` for the
   runtime) pin `setuptools<70`, and the runtime pin is reapplied at the end of
   the deploy stage so that it survives the dependency installs in between.
+
+The same revocation took the benchmark prompts with it. `tools/env_setup.sh`
+downloads `prompt.json` from an Intel S3 bucket that now answers `403`, then
+symlinks `single_instance/prompt.json` and `distributed/prompt.json` at it. Since
+`ln -s` succeeds against a missing target, the failed download leaves two
+dangling links and the benchmark dies at runtime with
+`FileNotFoundError: /home/ubuntu/llm/distributed/prompt.json`. The file is in no
+git tag or branch of the 2.3.100+cpu tree.
+
+`CPU/prompt.json` is a committed replacement, generated with the Llama-2
+tokenizer so that each prompt is *exactly* its nominal token count —
+`--input-tokens N` is the independent variable of the input-length sweep, so an
+approximate length would mislabel the x-axis. `ipex.patch` makes the dead
+download non-fatal and copies this file into the image after `env_setup.sh` has
+run; `bootstrap_build.sh` stages it into the build context and verifies the
+hash in the built image. Committing it also means every machine in a comparison
+runs byte-identical prompts. See `CPU/make_prompts.py` for how it was produced
+and how to verify it.
 
 ### SGX Setup
 
@@ -142,7 +173,7 @@ SSH to the VM and run the host setup script:
 ```sh
 ssh -p 10022 tdx@localhost
 cd confidential-llms-in-tees/CPU
-HUGGINGFACE_TOKEN=<token> ./host_setup.sh
+HF_TOKEN=<token> ./host_setup.sh
 ```
 Relogin to apply changes in groups. Finally, compile the docker container:
 ```sh
