@@ -1,5 +1,7 @@
 results/
 models/
+# created by host_setup.sh in whatever directory it is run from
+.venv/
 experiment.log
 nohup.out
 __pycache__/
