@@ -25,8 +25,8 @@ DEFAULT_OUTPUT_LEN = 128
 # meaningful together with the machine it was measured on, so the price has to be
 # given explicitly rather than defaulted.
 VM_PRICES = {
-    "NCC40ads_H100_v5": 8.90,  # confidential (cGPU)
-    "NC40ads_H100_v5": 9.08,   # non-confidential (GPU)
+    "NCC40ads_H100_v5": 8.90,  # confidential (cGPU), unchanged since 2024-12-01
+    "NC40ads_H100_v5": 5.23,   # non-confidential (GPU), eff. 2026-08-01, was 9.08
 }
 
 # Pattern: latency_in{input_len}_bs{batch}.json
