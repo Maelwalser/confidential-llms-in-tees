@@ -16,7 +16,7 @@
 #   MODELS, QUANTS, IMAGE
 #   VCPU_LIST   CPUs to run on. Default: the first hardware thread of every
 #               physical core, so hyperthread siblings are never both used.
-#               Accepts a range (0-31) or a comma list (0,2,4,...,62).
+#               Accepts ranges and comma lists (0-31, 0,2,4,...,62, 0-15,32-47).
 #   RANKS       DeepSpeed ranks (default 1). Use one per socket on multi-socket
 #               VMs so each rank's memory stays on its own NUMA node.
 #   BINDFLAGS   DeepSpeed binding flags. Default pins ranks to VCPU_LIST and
@@ -53,13 +53,8 @@ export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
 if [[ -z "${VCPU_LIST:-}" ]]; then
     VCPU_LIST="$(lscpu -p=CPU,CORE | awk -F, '!/^#/ && !seen[$2]++ {print $1}' | paste -sd,)"
 fi
-if [[ "$VCPU_LIST" == *,* ]]; then
-    vCPUs_num=$(awk -F, '{print NF}' <<<"$VCPU_LIST")
-elif [[ "$VCPU_LIST" == *-* ]]; then
-    vCPUs_num=$(awk -F- '{print ($2-$1+1)}' <<<"$VCPU_LIST")
-else
-    vCPUs_num=1
-fi
+# Count CPUs across comma-separated entries, each a single CPU or an a-b range.
+vCPUs_num=$(awk -v RS=, -F- 'NF {n += (NF == 2) ? $2 - $1 + 1 : 1} END {print n}' <<<"$VCPU_LIST")
 RANKS="${RANKS:-1}"
 BINDFLAGS="${BINDFLAGS---bind_cores_to_rank --bind_core_list $VCPU_LIST}"
 
