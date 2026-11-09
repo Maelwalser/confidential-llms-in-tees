@@ -317,13 +317,15 @@ pair of single-H100 VMs and keep everything else identical between the two runs:
 | Series | SKU | $/hour | Confidential |
 | --- | --- | --- | --- |
 | `cGPU` | `Standard_NCC40ads_H100_v5` | 8.90 | yes, CC mode on |
-| `GPU` | `Standard_NC40ads_H100_v5` | 5.23 | no |
+| `GPU` | `Standard_NC40ads_H100_v5` | 9.08 | no |
 
-The non-confidential VM is now the cheaper of the two, at 58% of the price of
-the confidential one (it was repriced from 9.08 to 5.23 on 2026-08-01, while the
-confidential SKU was left unchanged). So the confidential VM's performance
-overhead is compounded, not offset, when the comparison is made in cost per
-token rather than in throughput.
+Prices are West Europe, Linux, pay-as-you-go, from the Azure Retail Prices API
+with the Spot and Low Priority meters excluded (verified 2026-11-09). The
+confidential SKU is about 2% cheaper than the non-confidential one, so in cost
+per token the confidential VM's performance overhead is slightly offset rather
+than compounded. An earlier revision of this file quoted 5.23 for the
+non-confidential VM; that figure was a Low Priority meter, not the on-demand
+rate.
 
 ### Setup
 vLLM must be **0.8.5**. The sweep sets `VLLM_USE_V1=0` to force the V0 engine,
@@ -361,7 +363,7 @@ from has to be given explicitly, since the two VMs are priced differently:
 
 ```sh
 python parse.py <cGPU results dir> --sku NCC40ads_H100_v5   # $8.90/h
-python parse.py <GPU results dir>  --sku NC40ads_H100_v5    # $5.23/h
+python parse.py <GPU results dir>  --sku NC40ads_H100_v5    # $9.08/h
 ```
 
 Use `--cost <usd_per_hour>` for a region or SKU outside that table. The chosen
